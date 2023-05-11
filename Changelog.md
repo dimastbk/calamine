@@ -13,6 +13,7 @@
 ## 0.19.2
 
 - feat: Extract picture data by turning `picture` feature on
+- fix: handling `table:number-rows-repeated` attribute in ODS
 
 ## 0.19.1
 
