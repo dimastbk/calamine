@@ -345,7 +345,7 @@ fn get_range<T: Default + Clone + PartialEq>(
 
             if empty_row_repeats > 0 {
                 row_max = row_max + empty_row_repeats - 1;
-                for _ in 1..=empty_row_repeats {
+                for _ in 0..empty_row_repeats {
                     new_cells.extend_from_slice(&empty_cells);
                 }
                 empty_row_repeats = 0;
@@ -355,7 +355,7 @@ fn get_range<T: Default + Clone + PartialEq>(
                 row_max = row_max + row_repeats - 1;
             };
 
-            for _ in 1..=row_repeats {
+            for _ in 0..row_repeats {
                 match row.len().cmp(&(col_max + 1)) {
                     std::cmp::Ordering::Less => {
                         new_cells.extend_from_slice(&row[col_min..]);
@@ -386,6 +386,7 @@ fn read_row(
     cells: &mut Vec<DataType>,
     formulas: &mut Vec<String>,
 ) -> Result<(), OdsError> {
+    let mut empty_col_repeats = 0;
     loop {
         row_buf.clear();
         match reader.read_event_into(row_buf) {
@@ -393,23 +394,30 @@ fn read_row(
                 if e.name() == QName(b"table:table-cell")
                     || e.name() == QName(b"table:covered-table-cell") =>
             {
-                let mut repeats = 1;
-                for a in e.attributes() {
-                    let a = a.map_err(OdsError::XmlAttr)?;
-                    if a.key == QName(b"table:number-columns-repeated") {
-                        repeats = reader
-                            .decoder()
-                            .decode(&a.value)?
-                            .parse()
-                            .map_err(OdsError::ParseInt)?;
-                        break;
-                    }
-                }
+                let repeats = match e.try_get_attribute(b"table:number-columns-repeated")? {
+                    Some(c) => c
+                        .decode_and_unescape_value(reader)
+                        .map_err(OdsError::Xml)?
+                        .parse()
+                        .map_err(OdsError::ParseInt)?,
+                    None => 1,
+                };
 
                 let (value, formula, is_closed) = get_datatype(reader, e.attributes(), cell_buf)?;
-                for _ in 0..repeats {
-                    cells.push(value.clone());
-                    formulas.push(formula.clone());
+                if value.is_empty() && formula.is_empty() {
+                    empty_col_repeats = repeats;
+                } else {
+                    if empty_col_repeats > 0 {
+                        for _ in 0..empty_col_repeats {
+                            cells.push(DataType::Empty);
+                            formulas.push("".to_string());
+                        }
+                        empty_col_repeats = 0;
+                    };
+                    for _ in 0..repeats {
+                        cells.push(value.clone());
+                        formulas.push(formula.clone());
+                    }
                 }
                 if !is_closed {
                     reader.read_to_end_into(e.name(), cell_buf)?;
