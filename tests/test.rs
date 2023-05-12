@@ -1,5 +1,7 @@
 use calamine::CellErrorType::*;
-use calamine::DataType::{Bool, DateTime, DateTimeIso, DurationIso, Empty, Error, Float, String};
+use calamine::DataType::{
+    Bool, DateTime, DateTimeIso, DurationIso, Empty, Error, Float, Int, String,
+};
 use calamine::{open_workbook, open_workbook_auto, Ods, Reader, Xls, Xlsb, Xlsx};
 use std::io::Cursor;
 use std::sync::Once;
@@ -950,6 +952,36 @@ fn ods_number_rows_repeated() {
             [String("C".to_string()), String("D".to_string())],
             [Empty, Empty],
             [String("C".to_string()), String("D".to_string())],
+            [String("C".to_string()), String("D".to_string())],
+        ]
+    );
+}
+
+#[test]
+fn ods_number_rows_repeated2() {
+    setup();
+
+    let path = format!("{}/tests/testmultiindex.ods", env!("CARGO_MANIFEST_DIR"));
+    let mut ods: Ods<_> = open_workbook(&path).unwrap();
+    let range = ods.worksheet_range_at(12).unwrap().unwrap();
+
+    range_eq!(
+        range,
+        [
+            [
+                String("A".to_string()),
+                String("A".to_string()),
+                String("B".to_string()),
+                String("B".to_string())
+            ],
+            [
+                String("key".to_string()),
+                String("val".to_string()),
+                String("key".to_string()),
+                String("val".to_string())
+            ],
+            [Int(1), Int(2), Int(3), Int(4)],
+            [Int(1), Int(2), Int(3), Int(4)],
         ]
     );
 }
