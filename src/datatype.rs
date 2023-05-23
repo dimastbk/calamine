@@ -88,7 +88,7 @@ impl DataType {
     }
     /// Try getting float value
     pub fn get_float(&self) -> Option<f64> {
-        if let DataType::Float(v) = self {
+        if let DataType::Float(v) | DataType::DateTime(v) = self {
             Some(*v)
         } else {
             None
@@ -104,7 +104,7 @@ impl DataType {
     }
     /// Try getting string value
     pub fn get_string(&self) -> Option<&str> {
-        if let DataType::String(v) = self {
+        if let DataType::String(v) | DataType::DateTimeIso(v) | DataType::DurationIso(v) = self {
             Some(&**v)
         } else {
             None
