@@ -8,8 +8,7 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::io::{BufReader, Read, Seek};
 
-use quick_xml::events::attributes::Attributes;
-use quick_xml::events::Event;
+use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::QName;
 use quick_xml::Reader as XmlReader;
 use zip::read::{ZipArchive, ZipFile};
@@ -94,6 +93,22 @@ impl std::error::Error for OdsError {
             _ => None,
         }
     }
+}
+
+/// An OpenDocument Spreadsheet office:value-type
+///
+/// http://docs.oasis-open.org/office/v1.2/os/OpenDocument-v1.2-os-part1.html#attribute-office_value-type
+#[derive(Debug, PartialEq)]
+enum OdsValueType {
+    Boolean,
+    Currency,
+    Date,
+    Float,
+    Percentage,
+    String,
+    Time,
+    Void,
+    Undefined,
 }
 
 /// An OpenDocument Spreadsheet document parser
@@ -407,7 +422,7 @@ fn read_row(
                     }
                 }
 
-                let (value, formula, is_closed) = get_datatype(reader, e.attributes(), cell_buf)?;
+                let (value, formula, is_closed) = get_datatype(reader, e, cell_buf)?;
 
                 for _ in 0..empty_col_repeats {
                     cells.push(DataType::Empty);
@@ -445,41 +460,75 @@ fn read_row(
 /// ODF 1.2-19.385
 fn get_datatype(
     reader: &mut OdsReader<'_>,
-    atts: Attributes<'_>,
+    el: &BytesStart<'_>,
     buf: &mut Vec<u8>,
 ) -> Result<(DataType, String, bool), OdsError> {
-    let mut is_string = false;
     let mut is_value_set = false;
     let mut val = DataType::Empty;
     let mut formula = String::new();
-    for a in atts {
+    let value_type = match el.try_get_attribute(b"office:value-type")? {
+        Some(v) => match v.decode_and_unescape_value(reader)?.as_ref() {
+            "boolean" => OdsValueType::Boolean,
+            "currency" => OdsValueType::Currency,
+            "date" => OdsValueType::Date,
+            "float" => OdsValueType::Float,
+            "percentage" => OdsValueType::Percentage,
+            "string" => OdsValueType::String,
+            "time" => OdsValueType::Time,
+            "void" => OdsValueType::Void,
+            e => Err(OdsError::Mismatch {
+                expected: "office:value-type",
+                found: format!("{:?}", e),
+            })?,
+        },
+        None => OdsValueType::Undefined,
+    };
+    for a in el.attributes() {
         let a = a.map_err(OdsError::XmlAttr)?;
         match a.key {
-            QName(b"office:value") if !is_value_set => {
+            QName(b"office:value")
+                if (value_type == OdsValueType::Float
+                    || value_type == OdsValueType::Percentage
+                    || value_type == OdsValueType::Currency)
+                    && !is_value_set =>
+            {
                 let v = reader.decoder().decode(&a.value)?;
                 val = DataType::Float(v.parse().map_err(OdsError::ParseFloat)?);
                 is_value_set = true;
             }
-            QName(b"office:string-value" | b"office:date-value" | b"office:time-value")
-                if !is_value_set =>
+            QName(b"office:string-value")
+                if (value_type == OdsValueType::String) && !is_value_set =>
             {
-                let attr = a
-                    .decode_and_unescape_value(reader)
-                    .map_err(OdsError::Xml)?
-                    .to_string();
-                val = match a.key {
-                    QName(b"office:date-value") => DataType::DateTimeIso(attr),
-                    QName(b"office:time-value") => DataType::DurationIso(attr),
-                    _ => DataType::String(attr),
-                };
+                val = DataType::String(
+                    a.decode_and_unescape_value(reader)
+                        .map_err(OdsError::Xml)?
+                        .to_string(),
+                );
                 is_value_set = true;
             }
-            QName(b"office:boolean-value") if !is_value_set => {
+            QName(b"office:date-value") if (value_type == OdsValueType::Date) && !is_value_set => {
+                val = DataType::DateTimeIso(
+                    a.decode_and_unescape_value(reader)
+                        .map_err(OdsError::Xml)?
+                        .to_string(),
+                );
+                is_value_set = true;
+            }
+            QName(b"office:time-value") if (value_type == OdsValueType::Time) && !is_value_set => {
+                val = DataType::DurationIso(
+                    a.decode_and_unescape_value(reader)
+                        .map_err(OdsError::Xml)?
+                        .to_string(),
+                );
+                is_value_set = true;
+            }
+            QName(b"office:boolean-value")
+                if (value_type == OdsValueType::Boolean) && !is_value_set =>
+            {
                 let b = &*a.value == b"TRUE" || &*a.value == b"true";
                 val = DataType::Bool(b);
                 is_value_set = true;
             }
-            QName(b"office:value-type") if !is_value_set => is_string = &*a.value == b"string",
             QName(b"table:formula") => {
                 formula = a
                     .decode_and_unescape_value(reader)
@@ -489,7 +538,7 @@ fn get_datatype(
             _ => (),
         }
     }
-    if !is_value_set && is_string {
+    if !is_value_set && value_type == OdsValueType::String {
         // If the value type is string and the office:string-value attribute
         // is not present, the element content defines the value.
         let mut s = String::new();
